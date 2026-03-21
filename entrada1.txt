@@ -1,0 +1,19 @@
+ciudad,temperatura,unidad
+CDMX,22,C
+Nueva York,50,F
+Moscu,-10,C
+Miami,95,F
+Cancun,30,C
+Chicago,14,F
+Phoenix,104,F
+Error,abc,C
+Lima,25,C
+Bangkok,36,C
+Oslo,0,C
+Bogota,16,C
+Dubai,110,F
+Tokio,28,C
+Londres,15,c
+Madrid,20,f
+Invalida,30,X
+SinColumnas,25
