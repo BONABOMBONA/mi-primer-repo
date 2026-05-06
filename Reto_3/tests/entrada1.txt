@@ -1,0 +1,6 @@
+fecha,producto,cantidad,precio_unitario
+2026-01-01,Laptop,2,15000.00
+2026-01-02,Mouse,10,250.00
+2026-01-03,Laptop,1,14500.00
+2026-01-04,Teclado,5,800.00
+2026-01-05,Mouse,8,250.00

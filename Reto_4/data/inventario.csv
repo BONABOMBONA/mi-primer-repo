@@ -1,0 +1,8 @@
+sku,nombre,categoria,precio,stock,stock_minimo
+SKU001,Laptop HP,Electronica,15000.00,5,10
+SKU002,Mouse Logitech,Accesorios,350.00,3,15
+SKU003,Teclado Mecanico,Accesorios,800.00,20,10
+SKU004,Monitor LG,Electronica,6000.00,8,5
+SKU005,Audifonos Sony,Accesorios,1200.00,2,10
+SKU006,Webcam HD,Accesorios,450.00,25,20
+SKU007,SSD 1TB,Almacenamiento,1800.00,0,5

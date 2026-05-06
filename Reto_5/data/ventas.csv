@@ -1,0 +1,6 @@
+fecha,producto,cantidad,precio,vendedor
+2026-01-01,Laptop,2,15000.00,Ana
+2026-01-02,Mouse,10,250.00,Bob
+2026-01-03,Teclado,,800.00,Ana
+2026-01-04,Monitor,3,,Carlos
+2026-01-05,Laptop,1,15000.00,
