@@ -1,19 +1,9 @@
-#!/usr/bin/env python3
-"""
-Perfilador de Datasets CSV
-Analiza cualquier archivo CSV y genera un reporte de calidad de datos.
 
-Uso:
-    python main.py --input <archivo.csv> --output <perfil.csv>
-"""
 
 import argparse
 import sys
 
 
-# ---------------------------------------------------------------------------
-# Funciones de deteccion de tipos
-# ---------------------------------------------------------------------------
 
 def es_valor_nulo(valor):
     """
@@ -57,9 +47,6 @@ def es_booleano(valor):
     return v in {"true", "false", "yes", "no", "si", "1", "0", "t", "f"}
 
 
-# ---------------------------------------------------------------------------
-# Inferencia y perfilado
-# ---------------------------------------------------------------------------
 
 def inferir_tipo(valores):
     """
@@ -123,11 +110,6 @@ def perfilar_columna(nombre, valores):
         "ejemplo_valor": ejemplo,
     }
 
-
-# ---------------------------------------------------------------------------
-# I/O
-# ---------------------------------------------------------------------------
-
 def leer_csv(ruta):
     """
     Lee un archivo CSV y retorna encabezados y filas.
@@ -188,18 +170,14 @@ def escribir_csv(ruta, perfiles):
             f.write(",".join(fila) + "\n")
 
 
-# ---------------------------------------------------------------------------
-# Punto de entrada
-# ---------------------------------------------------------------------------
-
 def main():
     parser = argparse.ArgumentParser(
         description="Perfilador de Datasets CSV"
     )
-    parser.add_argument("--input", "-i", required=True,
-                        help="Ruta al CSV de entrada")
-    parser.add_argument("--output", "-o", required=True,
-                        help="Ruta al CSV de salida")
+    parser.add_argument("--input", "-i", default="data/ventas.csv",
+                        help="Ruta al CSV de entrada (default: data/ventas.csv)")
+    parser.add_argument("--output", "-o", default="outputs/perfil_ventas.csv",
+                        help="Ruta al CSV de salida (default: outputs/perfil_ventas.csv)")
 
     args = parser.parse_args()
 

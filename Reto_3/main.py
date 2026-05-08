@@ -2,16 +2,7 @@ import sys
 
 
 def leer_transacciones(lineas):
-    """
-    Lee las transacciones del CSV (lista de líneas) y retorna
-    un diccionario agrupado por producto.
-    
-    Args:
-        lineas: lista de strings con el contenido del CSV
-    
-    Returns:
-        dict: {producto: {"unidades": int, "ingreso": float}}
-    """
+
     productos = {}
     primera_linea = True
 

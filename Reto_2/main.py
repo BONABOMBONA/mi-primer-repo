@@ -1,24 +1,7 @@
-"""
-Clasificador de Temperaturas
-Reto Semana 2 - Programacion para Ciencia de Datos
-Instituto Politecnico Nacional | Semestre Febrero-Julio 2026
-
-Lee un CSV desde stdin con columnas: ciudad,temperatura,unidad
-Escribe un CSV a stdout con columnas: ciudad,temperatura_celsius,clasificacion
-"""
-
 import sys
 
 
 def fahrenheit_a_celsius(f: float) -> float:
-    """Convierte una temperatura de Fahrenheit a Celsius.
-    
-    Args:
-        f: Temperatura en grados Fahrenheit.
-    
-    Returns:
-        Temperatura equivalente en grados Celsius.
-    """
     return (f - 32) * 5 / 9
 
 

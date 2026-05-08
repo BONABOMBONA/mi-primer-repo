@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Sistema de Inventario Modular
-Genera reporte de productos que necesitan reorden.
-"""
-
 from models.producto import Producto
 from utils.validators import validar_producto
 from utils.io import leer_inventario, escribir_reporte

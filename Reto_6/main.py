@@ -1,26 +1,11 @@
-#!/usr/bin/env python3
-"""
-Validador de Códigos con Expresiones Regulares
-Sistema de validación para códigos de producto, envío, empleado y factura.
-
-Uso:
-    python main.py
-"""
-
 import re
 import sys
 from datetime import date
 
-# ---------------------------------------------------------------------------
-# Constantes
-# ---------------------------------------------------------------------------
 
 DEPARTAMENTOS_VALIDOS = {"VEN", "ADM", "TEC", "LOG", "RHH"}
 SERIES_VALIDAS = {"A", "B", "C", "D", "E"}
 
-# ---------------------------------------------------------------------------
-# PARTE 1: Funciones de validación individual
-# ---------------------------------------------------------------------------
 
 def validar_producto(codigo: str) -> dict:
     """
@@ -120,10 +105,6 @@ def validar_factura(codigo: str) -> dict:
     return resultado
 
 
-# ---------------------------------------------------------------------------
-# PARTE 2: Validador universal
-# ---------------------------------------------------------------------------
-
 def validar_codigo(codigo: str) -> dict:
     """
     Detecta el tipo de código y lo valida automáticamente.
@@ -174,9 +155,6 @@ def validar_codigo(codigo: str) -> dict:
     return resultado
 
 
-# ---------------------------------------------------------------------------
-# PARTE 3: Procesamiento por lotes
-# ---------------------------------------------------------------------------
 
 def procesar_lote(codigos: list) -> dict:
     """
@@ -216,9 +194,6 @@ def procesar_lote(codigos: list) -> dict:
     return resultado
 
 
-# ---------------------------------------------------------------------------
-# BONUS: Utilidades extras
-# ---------------------------------------------------------------------------
 
 def validar_fecha_real(anio: int, mes: int, dia: int) -> bool:
     """Valida que la combinación año/mes/día sea una fecha calendario real."""
@@ -256,9 +231,6 @@ def exportar_resultados(reporte: dict, archivo: str) -> None:
             )
 
 
-# ---------------------------------------------------------------------------
-# Presentación de resultados
-# ---------------------------------------------------------------------------
 
 def mostrar_resultado(resultado: dict) -> None:
     """Muestra el resultado de validación de forma legible."""
@@ -291,10 +263,6 @@ def mostrar_reporte(reporte: dict) -> None:
             )
     print("\n" + "=" * 60)
 
-
-# ---------------------------------------------------------------------------
-# Datos de prueba y punto de entrada
-# ---------------------------------------------------------------------------
 
 CODIGOS_PRUEBA = [
     # Productos
@@ -359,7 +327,7 @@ def main():
     reporte = procesar_lote(CODIGOS_PRUEBA)
     mostrar_reporte(reporte)
 
-    # BONUS: exportar a CSV
+   
     exportar_resultados(reporte, "outputs/resultados_validacion.csv")
     print("Resultados exportados en: outputs/resultados_validacion.csv")
 
