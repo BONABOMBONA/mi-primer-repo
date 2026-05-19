@@ -1,8 +1,29 @@
 sku,nombre,categoria,precio,stock,stock_minimo
-SKU001,Laptop HP,Electronica,15000.00,5,10
-SKU002,Mouse Logitech,Accesorios,350.00,3,15
-SKU003,Teclado Mecanico,Accesorios,800.00,20,10
-SKU004,Monitor LG,Electronica,6000.00,8,5
-SKU005,Audifonos Sony,Accesorios,1200.00,2,10
-SKU006,Webcam HD,Accesorios,450.00,25,20
-SKU007,SSD 1TB,Almacenamiento,1800.00,0,5
+SKU47845,Mouse Gaming MSI,Accesorios,inf,1,50
+SKU47846,Audifonos SanDisk,Audio,674.50,0,10
+SKU47847,SSD Externo Seagate,Almacenamiento,5346.05,146,50
+SKU47848,Procesador WD,Componentes,9644.82,14,5
+SKU47849,NAS Dell,Almacenamiento,18923.49,9,10,12..5,N/A
+SKU47848,Procesador WD,Componentes,9644.82,14,5
+SKU47849,NAS Dell,Almacenamiento,18923.49,9,10,12..5,N/A
+SKU47850,HDD Dell,Almacenamiento,2211.39,,25
+SKU47851,Audifonos Bluetooth Corsair,Audio,1664.06,inf,50
+SKU47852,Touchpad Seagate,Accesorios,1886.44,59,30
+SKU48582,Monitor Xiaomi,Electronica,13838.80,30,10
+SKU48583,Teclado Mecanico Sony,Accesorios,2098.46,26,NaN
+SKU48584,Teclado Gaming Apple,Accesorios,2968.53,0,5
+SKU48585,Monitor Gaming Lenovo,Electronica,inf,31,15
+SKU48586,MacBook TP-Link,Electronica,29063.93,15,10,inf,---,abc
+SKU48587,SSD Externo Sony,Almacenamiento,2776.46
+SKU48588,Laptop Logitech,Electronica,18748.16,23,10
+SKU48589,Bocina HP,Audio,1012.22,59,25
+SKU48590,MacBook LG,Electronica,35596.40,3,50
+SKU48591,HDD Dell,Almacenamiento,2704.30,27,25
+SKU48592,Monitor Asus,Electronica,TBD,96,50
+SKU31365,Audifonos Gaming Gigabyte,Audio,1739.54,29,15
+SKU31366,SSD Seagate,Almacenamiento,1536.33,34,50
+SKU31367,Monitor Gaming HP,Electronica,inf,0,30
+SKU31368,NAS SanDisk,Almacenamiento,20507.77,16,50
+SKU31369,Chromebook Apple,Electronica,13693.48,16,10
+SKU31370,Touchpad Apple,Accesorios,1216.82,7,5
+SKU31371,Teclado WD,Accesorios,1209.32,7,25
