@@ -1,527 +1,405 @@
-# -*- coding: utf-8 -*-
-# ===========================================================================
-#  NUCLEO COMUN: utilidades del clasificador de noticias falsas con TextCNN.
-#  (clean_text, vocabulario, GloVe, Dataset, TextCNN, entrenamiento, metricas)
-# ===========================================================================
-import os
-import re
-import math
-import copy
-import warnings
-from collections import Counter
-
 import numpy as np
-import pandas as pd
 
-import matplotlib
-matplotlib.use("Agg")  # backend sin ventana: no bloquea al correr como script
-import matplotlib.pyplot as plt
+#                    CONFIGURACIÓN INICIAL
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+np.set_printoptions(precision=2, suppress=True)
 
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import (accuracy_score, f1_score, precision_score,
-                             recall_score, confusion_matrix)
+print(" NumPy cargado correctamente")
+print(f"   Versión: {np.__version__}")
 
-warnings.filterwarnings("ignore")
+#                 GENERACIÓN DE DATOS DE TRANSACCIONES
 
-# ---------------------------------------------------------------------------
-# Configuracion editable
-# ---------------------------------------------------------------------------
-# El profesor coloca su CSV (con columnas title, text, label) en esta ruta,
-# o simplemente lo deja como "WELFake_Dataset.csv" junto a este main.py.
-DATA_PATH = "WELFake_Dataset.csv"
-MAX_VOCAB = 20000
-MAX_LEN = 200
-BATCH_SIZE = 64
+np.random.seed(2024)
 
-PAD_IDX, UNK_IDX = 0, 1
-PAD_TOKEN, UNK_TOKEN = "<PAD>", "<UNK>"
+categorias = ['Supermercados', 'Restaurantes', 'Gasolineras', 'Tiendas_Online', 'Entretenimiento']
+n_categorias = len(categorias)
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+params_categorias = {
+    'Supermercados':   (800,  400),
+    'Restaurantes':    (350,  150),
+    'Gasolineras':     (700,  250),
+    'Tiendas_Online':  (1200, 800),
+    'Entretenimiento': (200,  100),
+}
 
-_URL_RE = re.compile(r"http\S+|www\.\S+")
-_HTML_RE = re.compile(r"<[^>]+>")
-_NON_ALPHA_RE = re.compile(r"[^a-z\s]")
-_MULTISPACE_RE = re.compile(r"\s+")
+n_transacciones_por_cat = 500
 
+transacciones = {}
+ids_transaccion = {}
 
-# ---------------------------------------------------------------------------
-# Limpieza de texto
-# ---------------------------------------------------------------------------
-def clean_text(text):
-    """Minusculas, sin URLs/HTML/numeros; robusto ante None/NaN."""
-    if text is None:
-        return ""
-    if isinstance(text, float):
-        if math.isnan(text):
-            return ""
-        text = str(text)
-    if not isinstance(text, str):
-        text = str(text)
-    text = text.lower()
-    text = _URL_RE.sub(" ", text)
-    text = _HTML_RE.sub(" ", text)
-    text = _NON_ALPHA_RE.sub(" ", text)
-    text = _MULTISPACE_RE.sub(" ", text)
-    return text.strip()
+for i, cat in enumerate(categorias):
+    media, std = params_categorias[cat]
+    montos = np.random.normal(media, std, n_transacciones_por_cat)
+    montos = np.maximum(montos, 10)
 
+    n_anomalias_altas = np.random.randint(8, 15)
+    n_anomalias_bajas = np.random.randint(5, 10)
 
-# ---------------------------------------------------------------------------
-# Vocabulario y GloVe
-# ---------------------------------------------------------------------------
-def build_vocabulary(texts, max_vocab=MAX_VOCAB):
-    counter = Counter()
-    for t in texts:
-        if isinstance(t, str) and t:
-            counter.update(t.split())
-    word2idx = {PAD_TOKEN: PAD_IDX, UNK_TOKEN: UNK_IDX}
-    for word, _ in counter.most_common(max(0, int(max_vocab) - len(word2idx))):
-        if word not in word2idx:
-            word2idx[word] = len(word2idx)
-    return word2idx
+    indices_altas = np.random.choice(n_transacciones_por_cat, n_anomalias_altas, replace=False)
+    montos[indices_altas] = media + np.random.uniform(4, 8, n_anomalias_altas) * std
+
+    indices_bajas = np.random.choice(
+        [j for j in range(n_transacciones_por_cat) if j not in indices_altas],
+        n_anomalias_bajas, replace=False
+    )
+    montos[indices_bajas] = np.random.uniform(1, 15, n_anomalias_bajas)
+
+    transacciones[cat] = montos
+    ids_transaccion[cat] = np.arange(i * 1000 + 1, i * 1000 + n_transacciones_por_cat + 1)
+
+montos_matriz   = np.array([transacciones[cat] for cat in categorias])
+todos_montos    = np.concatenate([transacciones[cat] for cat in categorias])
+todas_categorias = np.concatenate([[cat] * n_transacciones_por_cat for cat in categorias])
+todos_ids       = np.concatenate([ids_transaccion[cat] for cat in categorias])
+
+print("╔══════════════════════════════════════════════════════════════════╗")
+print("║              DATOS DE TRANSACCIONES GENERADOS                    ║")
+print("╠══════════════════════════════════════════════════════════════════╣")
+print(f"║    montos_matriz    : shape {montos_matriz.shape}                      ║")
+print(f"║     (filas=categorías, columnas=transacciones)                  ║")
+print(f"║                                                                  ║")
+print(f"║    todos_montos     : {len(todos_montos):,} transacciones totales          ║")
+print(f"║     todas_categorias : {len(todas_categorias):,} etiquetas                    ║")
+print(f"║    todos_ids        : {len(todos_ids):,} identificadores                ║")
+print("╚══════════════════════════════════════════════════════════════════╝")
+
+print("\n  Categorías disponibles:")
+for i, cat in enumerate(categorias):
+    media, std = params_categorias[cat]
+    print(f"   {i}: {cat:20s} (μ=${media:,}, σ=${std})")
 
 
-def load_glove(glove_path, word2idx, embed_dim):
-    vocab_size = len(word2idx)
-    rng = np.random.default_rng(42)
-    mat = rng.normal(scale=0.6, size=(vocab_size, embed_dim)).astype(np.float32)
-    mat[PAD_IDX] = 0.0
-    if not glove_path or not os.path.exists(glove_path):
-        return mat
-    found = 0
-    with open(glove_path, "r", encoding="utf-8") as f:
-        for line in f:
-            parts = line.rstrip().split(" ")
-            if len(parts) != embed_dim + 1:
-                continue
-            idx = word2idx.get(parts[0])
-            if idx is None:
-                continue
-            try:
-                mat[idx] = np.asarray(parts[1:], dtype=np.float32)
-                found += 1
-            except ValueError:
-                continue
-    print(f"[GloVe] Cobertura: {found}/{vocab_size} ({found/max(vocab_size,1)*100:.1f}%)")
-    return mat
+#        PARTE 1: ANÁLISIS ESTADÍSTICO POR CATEGORÍA (30 pts)
+
+print("\n" + "═"*80)
+print("   PARTE 1: ANÁLISIS ESTADÍSTICO POR CATEGORÍA")
+print("═"*80)
+
+# ── Ejercicio 1.1: Estadísticas descriptivas ──────────────────────
+print("\n  ESTADÍSTICAS DESCRIPTIVAS POR CATEGORÍA")
+print("═" * 80)
+
+medias   = np.zeros(n_categorias)
+medianas = np.zeros(n_categorias)
+stds     = np.zeros(n_categorias)
+minimos  = np.zeros(n_categorias)
+maximos  = np.zeros(n_categorias)
+
+for i, cat in enumerate(categorias):
+    datos = montos_matriz[i]
+    medias[i]   = np.mean(datos)
+    medianas[i] = np.median(datos)
+    stds[i]     = np.std(datos)
+    minimos[i]  = np.min(datos)
+    maximos[i]  = np.max(datos)
+
+print(f"\n{'Categoría':<20} {'Media':>12} {'Mediana':>12} {'Std':>12} {'Mín':>10} {'Máx':>10}")
+print("─" * 80)
+for i, cat in enumerate(categorias):
+    print(f"{cat:<20} ${medias[i]:>10,.2f} ${medianas[i]:>10,.2f} "
+          f"${stds[i]:>10,.2f} ${minimos[i]:>8,.2f} ${maximos[i]:>8,.2f}")
+
+# ── Ejercicio 1.2: Cuartiles e IQR ───────────────────────────────
+print("\n  CUARTILES E IQR POR CATEGORÍA")
+print("═" * 80)
+
+Q1_arr  = np.zeros(n_categorias)
+Q2_arr  = np.zeros(n_categorias)
+Q3_arr  = np.zeros(n_categorias)
+IQR_arr = np.zeros(n_categorias)
+
+for i, cat in enumerate(categorias):
+    datos = montos_matriz[i]
+    Q1_arr[i]  = np.percentile(datos, 25)
+    Q2_arr[i]  = np.percentile(datos, 50)
+    Q3_arr[i]  = np.percentile(datos, 75)
+    IQR_arr[i] = Q3_arr[i] - Q1_arr[i]
+
+print(f"\n{'Categoría':<20} {'Q1 (25%)':>12} {'Q2 (50%)':>12} {'Q3 (75%)':>12} {'IQR':>12}")
+print("─" * 72)
+for i, cat in enumerate(categorias):
+    print(f"{cat:<20} ${Q1_arr[i]:>10,.2f} ${Q2_arr[i]:>10,.2f} "
+          f"${Q3_arr[i]:>10,.2f} ${IQR_arr[i]:>10,.2f}")
+
+# ── Ejercicio 1.3: Límites para outliers ─────────────────────────
+print("\n LÍMITES PARA DETECCIÓN DE OUTLIERS (Método IQR)")
+print("═" * 80)
+
+FACTOR_IQR = 1.5
+
+limites_inf = np.zeros(n_categorias)
+limites_sup = np.zeros(n_categorias)
+
+for i in range(n_categorias):
+    limites_inf[i] = Q1_arr[i] - FACTOR_IQR * IQR_arr[i]
+    limites_sup[i] = Q3_arr[i] + FACTOR_IQR * IQR_arr[i]
+
+print(f"\n{'Categoría':<20} {'Límite Inf':>15} {'Límite Sup':>15} {'Rango Válido':>20}")
+print("─" * 75)
+for i, cat in enumerate(categorias):
+    lim_inf_real = max(0, limites_inf[i])
+    rango = f"${lim_inf_real:,.0f} - ${limites_sup[i]:,.0f}"
+    print(f"{cat:<20} ${limites_inf[i]:>13,.2f} ${limites_sup[i]:>13,.2f} {rango:>20}")
 
 
-# ---------------------------------------------------------------------------
-# Dataset y DataLoaders
-# ---------------------------------------------------------------------------
-class FakeNewsDataset(Dataset):
-    def __init__(self, texts, labels, word2idx, max_len=MAX_LEN):
-        self.w2i = word2idx
-        self.max_len = int(max_len)
-        self.pad = word2idx.get(PAD_TOKEN, PAD_IDX)
-        self.unk = word2idx.get(UNK_TOKEN, UNK_IDX)
-        self.seqs = [self._encode(t) for t in texts]
-        self.labels = [int(l) for l in labels]
+# ══════════════════════════════════════════════════════════════════
+#          PARTE 2: DETECCIÓN DE OUTLIERS CON IQR (25 pts)
+# ══════════════════════════════════════════════════════════════════
 
-    def _encode(self, text):
-        if not isinstance(text, str):
-            text = "" if text is None else str(text)
-        ids = [self.w2i.get(w, self.unk) for w in text.split()][: self.max_len]
-        if len(ids) < self.max_len:
-            ids += [self.pad] * (self.max_len - len(ids))
-        return ids
+print("\n" + "═"*80)
+print("   PARTE 2: DETECCIÓN DE OUTLIERS CON IQR")
+print("═"*80)
 
-    def __len__(self):
-        return len(self.labels)
+# ── Ejercicio 2.1: Identificar outliers por categoría ─────────────
+print("\n DETECCIÓN DE TRANSACCIONES ANÓMALAS (Método IQR)")
+print("═" * 80)
 
-    def __getitem__(self, i):
-        return (torch.tensor(self.seqs[i], dtype=torch.long),
-                torch.tensor(self.labels[i], dtype=torch.long))
+outliers_iqr    = {}
+n_outliers_iqr  = np.zeros(n_categorias, dtype=int)
 
+for i, cat in enumerate(categorias):
+    datos = montos_matriz[i]
+    ids   = ids_transaccion[cat]
 
-def create_dataloaders(train, val, test, word2idx, batch_size=BATCH_SIZE, max_len=MAX_LEN):
-    tr = FakeNewsDataset(train[0], train[1], word2idx, max_len)
-    va = FakeNewsDataset(val[0], val[1], word2idx, max_len)
-    te = FakeNewsDataset(test[0], test[1], word2idx, max_len)
-    return (DataLoader(tr, batch_size=batch_size, shuffle=True),
-            DataLoader(va, batch_size=batch_size, shuffle=False),
-            DataLoader(te, batch_size=batch_size, shuffle=False))
+    mascara_outliers = (datos < limites_inf[i]) | (datos > limites_sup[i])
 
+    mascara_inf = datos < limites_inf[i]
+    mascara_sup = datos > limites_sup[i]
 
-# ---------------------------------------------------------------------------
-# Modelo TextCNN
-# ---------------------------------------------------------------------------
-class TextCNN(nn.Module):
-    def __init__(self, vocab_size, embed_dim=100, num_filters=100,
-                 kernel_sizes=(3, 4, 5), dropout=0.5, num_classes=1,
-                 pretrained_embeddings=None):
-        super().__init__()
-        if isinstance(kernel_sizes, int):
-            kernel_sizes = [kernel_sizes]
-        kernel_sizes = list(kernel_sizes)
-        self._max_kernel = max(kernel_sizes)
+    outliers_iqr[cat] = {
+        'ids':          ids[mascara_outliers],
+        'montos':       datos[mascara_outliers],
+        'n_total':      int(np.sum(mascara_outliers)),
+        'n_inferiores': int(np.sum(mascara_inf)),
+        'n_superiores': int(np.sum(mascara_sup)),
+    }
+    n_outliers_iqr[i] = int(np.sum(mascara_outliers))
 
-        self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
-        if pretrained_embeddings is not None:
-            w = torch.as_tensor(np.asarray(pretrained_embeddings), dtype=torch.float32)
-            if tuple(w.shape) == (vocab_size, embed_dim):
-                self.embedding.weight.data.copy_(w)
-            with torch.no_grad():
-                self.embedding.weight[0].fill_(0.0)
+print(f"\n{'Categoría':<20} {'Total Trans.':>12} {'Outliers':>10} {'% Anomalías':>12} {'Inf.':>8} {'Sup.':>8}")
+print("─" * 75)
+for i, cat in enumerate(categorias):
+    pct  = (n_outliers_iqr[i] / n_transacciones_por_cat) * 100
+    info = outliers_iqr[cat]
+    print(f"{cat:<20} {n_transacciones_por_cat:>12,} {info['n_total']:>10} "
+          f"{pct:>11.1f}% {info['n_inferiores']:>8} {info['n_superiores']:>8}")
 
-        self.convs = nn.ModuleList(
-            [nn.Conv1d(embed_dim, num_filters, k) for k in kernel_sizes])
-        self.dropout = nn.Dropout(dropout)
-        self.fc = nn.Linear(num_filters * len(kernel_sizes), num_classes)
+print(f"\n  Total de outliers detectados: {np.sum(n_outliers_iqr)}")
 
-    def forward(self, x):
-        emb = self.embedding(x).permute(0, 2, 1)           # (B, E, L)
-        if emb.size(2) < self._max_kernel:                 # seguridad si L < kernel
-            emb = F.pad(emb, (0, self._max_kernel - emb.size(2)))
-        conv_outputs = [torch.relu(c(emb)).max(dim=2)[0] for c in self.convs]
-        out = self.dropout(torch.cat(conv_outputs, dim=1))
-        logits = self.fc(out)
-        if logits.size(-1) == 1:
-            logits = logits.squeeze(-1)
-        return logits
+# ── Ejercicio 2.2: Análisis de outliers detectados ────────────────
+print("\n  ANÁLISIS DETALLADO DE OUTLIERS (Método IQR)")
+print("═" * 80)
+
+for cat in categorias:
+    info = outliers_iqr[cat]
+    if info['n_total'] > 0:
+        montos_out = info['montos']
+
+        monto_min_outlier     = np.min(montos_out)
+        monto_max_outlier     = np.max(montos_out)
+        monto_promedio_outlier = np.mean(montos_out)
+
+        print(f"\n   {cat}")
+        print(f"   Outliers detectados: {info['n_total']}")
+        print(f"   Monto mínimo outlier: ${monto_min_outlier:,.2f}")
+        print(f"   Monto máximo outlier: ${monto_max_outlier:,.2f}")
+        print(f"   Monto promedio outlier: ${monto_promedio_outlier:,.2f}")
+
+        if info['n_superiores'] > 0:
+            idx_ordenados = np.argsort(montos_out)[::-1]
+            print(f"   Top 3 montos más altos:")
+            for j in range(min(3, len(idx_ordenados))):
+                idx = idx_ordenados[j]
+                print(f"      - ID {info['ids'][idx]}: ${montos_out[idx]:,.2f}")
 
 
-# ---------------------------------------------------------------------------
-# Entrenamiento y evaluacion
-# ---------------------------------------------------------------------------
-def _epoch(model, loader, criterion, device, optimizer=None):
-    is_train = optimizer is not None
-    model.train() if is_train else model.eval()
-    tot, n, yt, yp = 0.0, 0, [], []
-    ctx = torch.enable_grad() if is_train else torch.no_grad()
-    with ctx:
-        for x, y in loader:
-            x = x.to(device)
-            y = y.to(device).view(-1).float()
-            if is_train:
-                optimizer.zero_grad()
-            logits = model(x).view(-1)
-            loss = criterion(logits, y)
-            if is_train:
-                loss.backward()
-                optimizer.step()
-            tot += loss.item() * y.size(0)
-            n += y.size(0)
-            yt.extend(y.long().cpu().tolist())
-            yp.extend((torch.sigmoid(logits) >= 0.5).long().cpu().tolist())
-    f1 = f1_score(yt, yp, zero_division=0) if yt else 0.0
-    return tot / max(n, 1), f1
+# ══════════════════════════════════════════════════════════════════
+#       PARTE 3: DETECCIÓN DE OUTLIERS CON Z-SCORE (25 pts)
+# ══════════════════════════════════════════════════════════════════
+
+print("\n" + "═"*80)
+print("   PARTE 3: DETECCIÓN DE OUTLIERS CON Z-SCORE")
+print("═"*80)
+
+# ── Ejercicio 3.1: Calcular Z-Scores ─────────────────────────────
+print("\n  CÁLCULO DE Z-SCORES POR CATEGORÍA")
+print("═" * 80)
+
+UMBRAL_ZSCORE   = 3
+zscores_matriz  = np.zeros_like(montos_matriz)
+
+for i, cat in enumerate(categorias):
+    datos     = montos_matriz[i]
+    media_cat = np.mean(datos)
+    std_cat   = np.std(datos)
+    zscores_matriz[i] = (datos - media_cat) / std_cat
+
+print(f"\n{'Categoría':<20} {'Media Z':>10} {'Std Z':>10} {'Min Z':>10} {'Max Z':>10}")
+print("─" * 65)
+for i, cat in enumerate(categorias):
+    zs = zscores_matriz[i]
+    print(f"{cat:<20} {np.mean(zs):>10.4f} {np.std(zs):>10.4f} "
+          f"{np.min(zs):>10.2f} {np.max(zs):>10.2f}")
+
+print(f"\n  Nota: La media de Z-scores debe ser ~0 y la std ~1")
+
+# ── Ejercicio 3.2: Detectar outliers con Z-Score ─────────────────
+print(f"\n  DETECCIÓN DE OUTLIERS CON Z-SCORE (umbral = {UMBRAL_ZSCORE})")
+print("═" * 80)
+
+outliers_zscore   = {}
+n_outliers_zscore = np.zeros(n_categorias, dtype=int)
+
+for i, cat in enumerate(categorias):
+    datos   = montos_matriz[i]
+    zscores = zscores_matriz[i]
+    ids     = ids_transaccion[cat]
+
+    mascara_outliers_z = np.abs(zscores) > UMBRAL_ZSCORE
+
+    mascara_z_neg = zscores < -UMBRAL_ZSCORE
+    mascara_z_pos = zscores >  UMBRAL_ZSCORE
+
+    outliers_zscore[cat] = {
+        'ids':     ids[mascara_outliers_z],
+        'montos':  datos[mascara_outliers_z],
+        'zscores': zscores[mascara_outliers_z],
+        'n_total': int(np.sum(mascara_outliers_z)),
+        'n_bajos': int(np.sum(mascara_z_neg)),
+        'n_altos': int(np.sum(mascara_z_pos)),
+    }
+    n_outliers_zscore[i] = int(np.sum(mascara_outliers_z))
+
+print(f"\n{'Categoría':<20} {'Total Trans.':>12} {'Outliers':>10} {'% Anomalías':>12} {'Z<-3':>8} {'Z>3':>8}")
+print("─" * 75)
+for i, cat in enumerate(categorias):
+    pct  = (n_outliers_zscore[i] / n_transacciones_por_cat) * 100
+    info = outliers_zscore[cat]
+    print(f"{cat:<20} {n_transacciones_por_cat:>12,} {info['n_total']:>10} "
+          f"{pct:>11.1f}% {info['n_bajos']:>8} {info['n_altos']:>8}")
+
+print(f"\n  Total de outliers detectados (Z-Score): {np.sum(n_outliers_zscore)}")
 
 
-def train_model(model, train_loader, val_loader, optimizer, criterion, device,
-                num_epochs=10, patience=3):
-    model.to(device)
-    history = {"train_loss": [], "train_f1": [], "val_loss": [], "val_f1": []}
-    best_f1, best_state, no_improve = -1.0, copy.deepcopy(model.state_dict()), 0
-    for ep in range(1, num_epochs + 1):
-        tl, tf = _epoch(model, train_loader, criterion, device, optimizer)
-        vl, vf = _epoch(model, val_loader, criterion, device, None)
-        history["train_loss"].append(tl); history["train_f1"].append(tf)
-        history["val_loss"].append(vl); history["val_f1"].append(vf)
-        print(f"  Epoca {ep:2d}/{num_epochs} | train_loss={tl:.4f} f1={tf:.4f}"
-              f" | val_loss={vl:.4f} f1={vf:.4f}")
-        if vf > best_f1:
-            best_f1, best_state, no_improve = vf, copy.deepcopy(model.state_dict()), 0
+# ══════════════════════════════════════════════════════════════════
+#         PARTE 4: COMPARACIÓN Y REPORTE FINAL (20 pts)
+# ══════════════════════════════════════════════════════════════════
+
+print("\n" + "═"*80)
+print("   PARTE 4: COMPARACIÓN Y REPORTE FINAL")
+print("═"*80)
+
+# ── Ejercicio 4.1: Comparar métodos ──────────────────────────────
+print("\n  COMPARACIÓN DE MÉTODOS DE DETECCIÓN")
+print("═" * 80)
+
+total_iqr    = int(np.sum(n_outliers_iqr))
+total_zscore = int(np.sum(n_outliers_zscore))
+
+print(f"\n  RESUMEN GLOBAL:")
+print(f"   Método IQR:     {total_iqr} outliers detectados")
+print(f"   Método Z-Score: {total_zscore} outliers detectados")
+
+print(f"\n{'Categoría':<20} {'IQR':>10} {'Z-Score':>10} {'Diferencia':>12} {'Coincidencia':>15}")
+print("─" * 72)
+
+for i, cat in enumerate(categorias):
+    n_iqr = n_outliers_iqr[i]
+    n_zs  = n_outliers_zscore[i]
+    diff  = n_iqr - n_zs
+
+    ids_iqr    = set(outliers_iqr[cat]['ids'])
+    ids_zscore = set(outliers_zscore[cat]['ids'])
+    coincidentes = len(ids_iqr & ids_zscore)
+
+    print(f"{cat:<20} {n_iqr:>10} {n_zs:>10} {diff:>+12} {coincidentes:>15}")
+
+# ── Ejercicio 4.2: Reporte de transacciones sospechosas ───────────
+print("\n╔══════════════════════════════════════════════════════════════════════════╗")
+print("║                                                                          ║")
+print("║          SECUREBANK - REPORTE DE TRANSACCIONES SOSPECHOSAS             ║")
+print("║                                                                          ║")
+print("╠══════════════════════════════════════════════════════════════════════════╣")
+print("║                                                                          ║")
+print("║     ALTA PRIORIDAD (detectadas por ambos métodos)                       ║")
+print("║  ─────────────────────────────────────────────────────────────────────   ║")
+
+total_alta_prioridad = 0
+
+for cat in categorias:
+    ids_iqr    = set(outliers_iqr[cat]['ids'])
+    ids_zscore = set(outliers_zscore[cat]['ids'])
+
+    ids_ambos = ids_iqr & ids_zscore   # intersección
+
+    if len(ids_ambos) > 0:
+        total_alta_prioridad += len(ids_ambos)
+        cat_idx = categorias.index(cat)
+
+        for trans_id in list(ids_ambos)[:3]:
+            idx    = np.where(ids_transaccion[cat] == trans_id)[0][0]
+            monto  = montos_matriz[cat_idx, idx]
+            zscore = zscores_matriz[cat_idx, idx]
+            print(f"║    ID {trans_id}: {cat:15s} ${monto:>10,.2f} (Z={zscore:+.2f}){'':>10}║")
+
+# Estadísticas finales
+total_transacciones = n_categorias * n_transacciones_por_cat
+
+ids_iqr_todos    = set(np.concatenate([outliers_iqr[c]['ids']    for c in categorias]))
+ids_zscore_todos = set(np.concatenate([outliers_zscore[c]['ids'] for c in categorias]))
+total_outliers_unicos = len(ids_iqr_todos | ids_zscore_todos)   # unión
+
+pct_anomalias = (total_outliers_unicos / total_transacciones) * 100
+
+print("║                                                                          ║")
+print(f"║    RESUMEN EJECUTIVO                                                    ║")
+print("║  ─────────────────────────────────────────────────────────────────────   ║")
+print(f"║    Total transacciones analizadas:    {total_transacciones:>6,}{'':>25}║")
+print(f"║    Transacciones sospechosas:         {total_outliers_unicos:>6,} ({pct_anomalias:.1f}%){'':>17}║")
+print(f"║    Alta prioridad (ambos métodos):    {total_alta_prioridad:>6,}{'':>25}║")
+print("║                                                                          ║")
+print("╚══════════════════════════════════════════════════════════════════════════╝")
+
+
+# ══════════════════════════════════════════════════════════════════
+#              BONUS: ANÁLISIS DE CORRELACIÓN (+10 pts)
+# ══════════════════════════════════════════════════════════════════
+
+print("\n" + "═"*70)
+print("   BONUS: ANÁLISIS DE CORRELACIÓN ENTRE CATEGORÍAS")
+print("═"*70)
+
+print("\n  ANÁLISIS DE CORRELACIÓN ENTRE CATEGORÍAS")
+print("═" * 70)
+
+matriz_correlacion = np.corrcoef(montos_matriz)
+
+print(f"\n{'':>18}", end='')
+for cat in categorias:
+    print(f"{cat[:8]:>10}", end='')
+print()
+print("─" * 70)
+
+for i, cat in enumerate(categorias):
+    print(f"{cat:<18}", end='')
+    for j in range(n_categorias):
+        valor = matriz_correlacion[i, j]
+        if i == j:
+            print(f"{'1.00':>10}", end='')
         else:
-            no_improve += 1
-            if no_improve >= patience:
-                print(f"  Early stopping en epoca {ep}.")
-                break
-    model.load_state_dict(best_state)
-    return history
+            print(f"{valor:>10.3f}", end='')
+    print()
 
+print(f"\n  CORRELACIONES MÁS FUERTES:")
+print("─" * 50)
 
-def train_proxy(model, train_loader, val_loader, device, epochs=3,
-                data_fraction=0.3, lr=1e-3):
-    model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.BCEWithLogitsLoss()
-    n_batches = max(1, int(len(train_loader) * data_fraction))
-    best = 0.0
-    for _ in range(epochs):
-        model.train()
-        for i, (x, y) in enumerate(train_loader):
-            if i >= n_batches:
-                break
-            x = x.to(device); y = y.to(device).view(-1).float()
-            optimizer.zero_grad()
-            loss = criterion(model(x).view(-1), y)
-            loss.backward(); optimizer.step()
-        _, vf = _epoch(model, val_loader, criterion, device, None)
-        best = max(best, vf)
-    return best
+max_corr = 0.0
+par_max  = ('', '')
 
+for i in range(n_categorias):
+    for j in range(i + 1, n_categorias):
+        if abs(matriz_correlacion[i, j]) > abs(max_corr):
+            max_corr = matriz_correlacion[i, j]
+            par_max  = (categorias[i], categorias[j])
 
-def evaluate_model(model, loader, criterion, device):
-    model.to(device); model.eval()
-    tot, n, yt, yp = 0.0, 0, [], []
-    with torch.no_grad():
-        for x, y in loader:
-            x = x.to(device); y = y.to(device).view(-1).float()
-            logits = model(x).view(-1)
-            tot += criterion(logits, y).item() * y.size(0); n += y.size(0)
-            yt.extend(y.long().cpu().tolist())
-            yp.extend((torch.sigmoid(logits) >= 0.5).long().cpu().tolist())
-    if not yt:
-        return {"loss": 0.0, "accuracy": 0.0, "f1": 0.0, "precision": 0.0, "recall": 0.0}
-    return {"loss": tot / max(n, 1),
-            "accuracy": float(accuracy_score(yt, yp)),
-            "f1": float(f1_score(yt, yp, zero_division=0)),
-            "precision": float(precision_score(yt, yp, zero_division=0)),
-            "recall": float(recall_score(yt, yp, zero_division=0))}
-
-
-def get_predictions(model, loader, device):
-    model.to(device); model.eval()
-    yt, yp, ypb = [], [], []
-    with torch.no_grad():
-        for x, y in loader:
-            x = x.to(device)
-            proba = torch.sigmoid(model(x).view(-1))
-            yt.extend(y.view(-1).long().cpu().tolist())
-            yp.extend((proba >= 0.5).long().cpu().tolist())
-            ypb.extend(proba.cpu().tolist())
-    return np.array(yt), np.array(yp), np.array(ypb)
-
-
-# ---------------------------------------------------------------------------
-# Graficas (se GUARDAN como PNG; no abren ventana)
-# ---------------------------------------------------------------------------
-def save_confusion_matrix(y_true, y_pred, path, labels=("Real", "Fake")):
-    labels = list(labels)
-    cm = confusion_matrix(y_true, y_pred, labels=range(len(labels)))
-    fig, ax = plt.subplots(figsize=(5, 4))
-    im = ax.imshow(cm, cmap="Blues"); fig.colorbar(im, ax=ax)
-    ax.set_xticks(range(len(labels))); ax.set_yticks(range(len(labels)))
-    ax.set_xticklabels(labels); ax.set_yticklabels(labels)
-    ax.set_xlabel("Prediccion"); ax.set_ylabel("Real"); ax.set_title("Matriz de Confusion")
-    th = cm.max() / 2.0 if cm.size else 0
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            ax.text(j, i, int(cm[i, j]), ha="center", va="center",
-                    color="white" if cm[i, j] > th else "black")
-    plt.tight_layout(); fig.savefig(path, dpi=120); plt.close(fig)
-    print(f"  [figura] {path}")
-
-
-def save_training_curves(history, path):
-    ep = range(1, len(history["train_loss"]) + 1)
-    fig, ax = plt.subplots(1, 2, figsize=(14, 5))
-    ax[0].plot(ep, history["train_loss"], "o-", label="Train"); ax[0].plot(ep, history["val_loss"], "o--", label="Val")
-    ax[0].set_title("Perdida"); ax[0].set_xlabel("Epoca"); ax[0].legend(); ax[0].grid(alpha=0.3)
-    ax[1].plot(ep, history["train_f1"], "o-", label="Train"); ax[1].plot(ep, history["val_f1"], "o--", label="Val")
-    ax[1].set_title("F1-Score"); ax[1].set_xlabel("Epoca"); ax[1].legend(); ax[1].grid(alpha=0.3)
-    plt.tight_layout(); fig.savefig(path, dpi=120); plt.close(fig)
-    print(f"  [figura] {path}")
-
-
-# ---------------------------------------------------------------------------
-# Carga de datos (real o sintetica de respaldo) + pipeline completo
-# ---------------------------------------------------------------------------
-def make_synthetic(n=1000, seed=0):
-    """Genera un dataset de prueba si no hay CSV, para que el script SIEMPRE corra."""
-    rng = np.random.default_rng(seed)
-    fake = "shocking secret exposed conspiracy miracle hoax click outrage banned breaking".split()
-    real = "according report officials study confirmed reuters announced policy committee economy".split()
-    fill = "the a of to and in for on with as by from that this it they we you".split()
-    titles, texts, labels = [], [], []
-    for i in range(n):
-        lab = int(rng.integers(0, 2))
-        pool = fake if lab == 1 else real
-        body = " ".join(rng.choice(pool + fill, size=int(rng.integers(20, 120))))
-        title = "" if i % 50 == 0 else " ".join(rng.choice(pool, size=int(rng.integers(3, 9))))
-        titles.append(title); texts.append(body); labels.append(lab)
-    return pd.DataFrame({"title": titles, "text": texts, "label": labels})
-
-
-def load_dataframe():
-    candidates = [DATA_PATH, "WELFake_Dataset.csv",
-                  os.path.join("..", "proyecto_semana6", "data", "raw", "WELFake_Dataset.csv"),
-                  os.path.join("data", "WELFake_Dataset.csv")]
-    for p in candidates:
-        if os.path.exists(p):
-            print(f"[datos] Cargando CSV real: {p}")
-            return pd.read_csv(p)
-    print("[datos] No se hallo WELFake_Dataset.csv -> se usan datos sinteticos (1000 filas).")
-    return make_synthetic(1000)
-
-
-def prepare_data(embed_dim=50, max_vocab=MAX_VOCAB, max_len=MAX_LEN, batch_size=BATCH_SIZE):
-    """Carga, limpia, divide, vectoriza y devuelve todo lo necesario para entrenar."""
-    df = load_dataframe()
-    if "Unnamed: 0" in df.columns:
-        df = df.drop(columns=["Unnamed: 0"])
-    for col in ("title", "text"):
-        if col not in df.columns:
-            df[col] = ""
-    df["title"] = df["title"].fillna("")
-    df["text"] = df["text"].fillna("")
-    if "label" not in df.columns:
-        raise ValueError("El CSV debe tener una columna 'label' (0=real, 1=fake).")
-    df["label"] = df["label"].astype(int)
-    df = df.drop_duplicates(subset=["title", "text"], keep="first").reset_index(drop=True)
-    df["text_clean"] = df["text"].apply(clean_text)
-
-    train_df, temp = train_test_split(df, test_size=0.2, random_state=42, stratify=df["label"])
-    val_df, test_df = train_test_split(temp, test_size=0.5, random_state=42, stratify=temp["label"])
-
-    word2idx = build_vocabulary(train_df["text_clean"].tolist(), max_vocab=max_vocab)
-    idx2word = {v: k for k, v in word2idx.items()}
-
-    glove_file = f"glove.6B.{embed_dim}d.txt"
-    emb = load_glove(glove_file, word2idx, embed_dim) if os.path.exists(glove_file) else None
-
-    loaders = create_dataloaders(
-        (train_df["text_clean"].tolist(), train_df["label"].tolist()),
-        (val_df["text_clean"].tolist(), val_df["label"].tolist()),
-        (test_df["text_clean"].tolist(), test_df["label"].tolist()),
-        word2idx, batch_size=batch_size, max_len=max_len)
-
-    print(f"[datos] Vocab={len(word2idx)} | Train={len(train_df)} Val={len(val_df)} Test={len(test_df)}"
-          f" | embeddings={'GloVe' if emb is not None else 'aleatorios'} | device={DEVICE}")
-
-    return {"df": df, "train_df": train_df, "val_df": val_df, "test_df": test_df,
-            "word2idx": word2idx, "idx2word": idx2word, "vocab_size": len(word2idx),
-            "emb": emb, "loaders": loaders, "device": DEVICE}
-
-
-# ===========================================================================
-#  RETO 9 — NAS con Algoritmo Genetico (busqueda de arquitectura TextCNN)
-#  Cromosoma de 5 genes -> 162 arquitecturas. Fitness = F1 proxy (rapido).
-#  Requiere DEAP:  pip install deap
-# ===========================================================================
-import sys
-try:
-    from deap import base, creator, tools, algorithms
-except ImportError:
-    print("ERROR: falta la libreria DEAP. Instalala con:  pip install deap")
-    sys.exit(1)
-
-# Espacio de busqueda (un valor por gen)
-EMBED_OPTS = [50, 100]
-FILTER_OPTS = [64, 128, 256]
-KERNEL_OPTS = [[3, 4, 5], [2, 3, 4], [3, 5, 7]]
-DROPOUT_OPTS = [0.3, 0.5, 0.7]
-LR_OPTS = [1e-2, 1e-3, 5e-4]
-_GENE_OPTS = [EMBED_OPTS, FILTER_OPTS, KERNEL_OPTS, DROPOUT_OPTS, LR_OPTS]
-
-# Parametros del AG (ajustables). Defaults moderados para que corra en minutos.
-POP_SIZE = 8
-NGEN = 5
-CXPB = 0.7
-MUTPB = 0.3
-PROXY_EPOCHS = 2
-PROXY_FRACTION = 0.3
-FULL_EPOCHS = 10
-
-
-def decode(individual):
-    def pick(opts, idx):
-        return opts[int(idx) % len(opts)]
-    return {"embed_dim": pick(EMBED_OPTS, individual[0]),
-            "num_filters": pick(FILTER_OPTS, individual[1]),
-            "kernel_sizes": list(pick(KERNEL_OPTS, individual[2])),
-            "dropout": pick(DROPOUT_OPTS, individual[3]),
-            "lr": pick(LR_OPTS, individual[4])}
-
-
-def _make_individual():
-    import random
-    return creator.Individual([random.randint(0, len(o) - 1) for o in _GENE_OPTS])
-
-
-def setup_toolbox(evaluate_func):
-    if not hasattr(creator, "FitnessMax"):
-        creator.create("FitnessMax", base.Fitness, weights=(1.0,))
-    if not hasattr(creator, "Individual"):
-        creator.create("Individual", list, fitness=creator.FitnessMax)
-    tb = base.Toolbox()
-    tb.register("individual", _make_individual)
-    tb.register("population", tools.initRepeat, list, tb.individual)
-    tb.register("evaluate", evaluate_func)
-    tb.register("mate", tools.cxOnePoint)
-    tb.register("mutate", tools.mutUniformInt,
-                low=[0] * len(_GENE_OPTS), up=[len(o) - 1 for o in _GENE_OPTS], indpb=0.2)
-    tb.register("select", tools.selTournament, tournsize=3)
-    return tb
-
-
-def run_evolution(toolbox, pop_size=POP_SIZE, ngen=NGEN, cxpb=CXPB, mutpb=MUTPB):
-    pop = toolbox.population(n=pop_size)
-    hof = tools.HallOfFame(1)
-    stats = tools.Statistics(lambda ind: ind.fitness.values[0])
-    stats.register("avg", np.mean); stats.register("max", np.max); stats.register("min", np.min)
-    pop, logbook = algorithms.eaSimple(pop, toolbox, cxpb=cxpb, mutpb=mutpb,
-                                       ngen=ngen, stats=stats, halloffame=hof, verbose=True)
-    return pop, logbook
-
-
-def save_evolution(logbook, path):
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.plot(logbook.select("gen"), logbook.select("max"), "o-", label="Maximo", color="steelblue")
-    ax.plot(logbook.select("gen"), logbook.select("avg"), "s--", label="Promedio", color="coral")
-    ax.set_xlabel("Generacion"); ax.set_ylabel("Fitness (F1 val)")
-    ax.set_title("Curva de Evolucion del AG"); ax.legend(); ax.grid(alpha=0.3)
-    plt.tight_layout(); fig.savefig(path, dpi=120); plt.close(fig)
-    print(f"  [figura] {path}")
-
-
-def run():
-    data = prepare_data(embed_dim=50)
-    train_loader, val_loader, test_loader = data["loaders"]
-    V, emb, device = data["vocab_size"], data["emb"], data["device"]
-
-    print(f"\nEspacio de busqueda: {np.prod([len(o) for o in _GENE_OPTS])} arquitecturas")
-
-    eval_count = [0]
-
-    def evaluate_individual(individual):
-        cfg = decode(individual); eval_count[0] += 1
-        torch.manual_seed(42)
-        model = TextCNN(V, cfg["embed_dim"], cfg["num_filters"], cfg["kernel_sizes"],
-                        cfg["dropout"], pretrained_embeddings=emb).to(device)
-        f1 = train_proxy(model, train_loader, val_loader, device,
-                         epochs=PROXY_EPOCHS, data_fraction=PROXY_FRACTION)
-        print(f"  [{eval_count[0]:3d}] {individual} -> F1={f1:.4f} | {cfg}")
-        return (f1,)
-
-    print("\n=== Iniciando evolucion ===")
-    toolbox = setup_toolbox(evaluate_individual)
-    result_pop, logbook = run_evolution(toolbox)
-    print(f"Evolucion completada. Evaluaciones totales: {eval_count[0]}")
-
-    pd.DataFrame(logbook).to_csv("nas_logbook.csv", index=False)
-    print("[salida] nas_logbook.csv")
-    save_evolution(logbook, "curva_evolucion.png")
-
-    # ---- Mejor individuo: entrenamiento completo ----
-    best_ind = tools.selBest(result_pop, k=1)[0]
-    best_cfg = decode(best_ind)
-    proxy_f1 = best_ind.fitness.values[0]
-    print(f"\nMejor cromosoma: {best_ind} -> {best_cfg}")
-    print(f"F1 proxy: {proxy_f1:.4f}")
-
-    torch.manual_seed(42)
-    best_model = TextCNN(V, best_cfg["embed_dim"], best_cfg["num_filters"],
-                         best_cfg["kernel_sizes"], best_cfg["dropout"],
-                         pretrained_embeddings=emb).to(device)
-    opt = torch.optim.Adam(best_model.parameters(), lr=best_cfg["lr"])
-    crit = nn.BCEWithLogitsLoss()
-    print("\nEntrenando completamente la mejor arquitectura...")
-    train_model(best_model, train_loader, val_loader, opt, crit, device, FULL_EPOCHS, 3)
-    tm = evaluate_model(best_model, test_loader, crit, device)
-    print("\n=== Resultados en test (modelo evolucionado) ===")
-    for k, v in tm.items():
-        print(f"  {k:>10s}: {v:.4f}")
-
-    full_f1 = tm["f1"]
-    print(f"\nProxy F1={proxy_f1:.4f} | Full F1={full_f1:.4f} | dif={abs(full_f1 - proxy_f1):.4f}")
-    print("Proxy confiable" if abs(full_f1 - proxy_f1) < 0.05 else "Proxy con diferencia > 0.05")
-
-
-if __name__ == "__main__":
-    run()
+print(f"   Mayor correlación: {par_max[0]} ↔ {par_max[1]}")
+print(f"   Valor: {max_corr:.4f}")
